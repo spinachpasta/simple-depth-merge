@@ -43,7 +43,7 @@ impl DepthView {
 
     pub fn debug_features(&self) -> Result<Mat> {
         let mut preview = self.rgb.try_clone()?;
-        
+
         for (fpname, fp) in &self.features {
             circle(
                 &mut preview,
@@ -69,8 +69,7 @@ impl DepthView {
         Ok(preview)
     }
     pub fn debug_side(&self) -> Result<Mat> {
-        let mut preview =
-            (Mat::zeros(self.width, self.height, cv::core::CV_8UC3)?).to_mat()?;
+        let mut preview = (Mat::zeros(self.width, self.height, cv::core::CV_8UC3)?).to_mat()?;
 
         for y in 0..self.height - 1 {
             for x in 0..self.width - 1 {
@@ -80,6 +79,33 @@ impl DepthView {
                 let mut p = preview.at_2d_mut::<Vec3b>(y, z)?;
                 *p = *c;
             }
+        }
+        for (fpname, fp) in &self.features {
+            let y = fp.y;
+            let x = fp.x;
+            let d = self.depth.at_2d::<u8>(y, x)?;
+            let z: i32 = *d as i32;
+
+            circle(
+                &mut preview,
+                Point_ { x: z, y: y },
+                5,
+                Scalar_::new(255.0, 0.0, 0.0, 1.0),
+                -1,
+                1,
+                0,
+            )?;
+            put_text(
+                &mut preview,
+                fpname,
+                Point_ { x: z, y: y },
+                FONT_HERSHEY_DUPLEX,
+                1.0,
+                Scalar_::new(255.0, 128.0, 128.0, 1.0),
+                1,
+                1,
+                false,
+            )?;
         }
         Ok(preview)
     }
@@ -103,11 +129,11 @@ fn main() -> Result<()> {
     feature_front.insert("eye".to_string(), Point_::<i32>::new(315, 210));
     feature_front.insert("chin".to_string(), Point_::<i32>::new(251, 363));
     feature_front.insert("hair".to_string(), Point_::<i32>::new(252, 130));
-    
+
     let front = DepthView::from_filename(
         "input/rgb/front.png".to_string(),
         "input/depth/front.png".to_string(),
-        feature_front
+        feature_front,
     )?;
 
     highgui::named_window("pseudo right", 0)?;
