@@ -3,6 +3,77 @@ use cv::prelude::MatExprTraitConst;
 use ndarray::ArrayView3;
 use opencv as cv;
 use opencv::{core::*, highgui, imgcodecs::*, imgproc::*, imgproc::*, prelude::*, Result};
+use std::collections::HashMap;
+
+struct DepthView {
+    rgb: Mat,
+    depth: Mat,
+    width: i32,
+    height: i32,
+    features: HashMap<String, Point_<i32>>,
+}
+
+impl DepthView {
+    pub fn new(rgb: Mat, depth: Mat, features: HashMap<String, Point_<i32>>) -> Result<DepthView> {
+        let image_size = rgb.size()?;
+        let depth_size = depth.size()?;
+        if image_size.width != depth_size.width && image_size.height != depth_size.height {
+            panic!("size of rgb and depth image have to be equal");
+        }
+        let ret = DepthView {
+            rgb: rgb,
+            depth: depth,
+            width: image_size.width,
+            height: image_size.height,
+            features: features,
+        };
+        Ok(ret)
+    }
+
+    pub fn debug_features(&self) -> Result<Mat> {
+        let mut preview = Mat::default();
+        for (fpname, fp) in &self.features {
+            circle(
+                &mut preview,
+                *fp,
+                5,
+                Scalar_::new(255.0, 0.0, 0.0, 1.0),
+                -1,
+                1,
+                0,
+            )?;
+            put_text(
+                &mut preview,
+                fpname,
+                Point2i::new(fp.x, fp.y),
+                FONT_HERSHEY_PLAIN,
+                1.0,
+                Scalar_::new(255.0, 0.0, 0.0, 1.0),
+                1,
+                1,
+                false,
+            )?;
+        }
+        Ok(preview)
+    }
+    pub fn debug_side(&self) -> Result<Mat> {
+        let image_size = self.rgb.size()?;
+        let depth_size = self.depth.size()?;
+        let mut preview =
+            (Mat::zeros(image_size.width, image_size.height, cv::core::CV_8UC3)?).to_mat()?;
+
+        for y in 0..image_size.height - 1 {
+            for x in 0..image_size.width - 1 {
+                let d = self.depth.at_2d::<u8>(y, x)?;
+                let c = self.rgb.at_2d::<Vec3b>(y, x)?;
+                let z: i32 = *d as i32;
+                let mut p = preview.at_2d_mut::<Vec3b>(y, z)?;
+                *p = *c;
+            }
+        }
+        Ok(preview)
+    }
+}
 
 fn main() -> Result<()> {
     let feature_front: [Point_<i32>; 4] = [
