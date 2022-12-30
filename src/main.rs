@@ -1,12 +1,14 @@
-use cv::core::{CV_8U, Vec3b};
+use cv::core::{Vec3b, CV_8U};
 use cv::prelude::MatExprTraitConst;
 use ndarray::ArrayView3;
 use opencv as cv;
-use opencv::{highgui, imgcodecs::*, prelude::*, Result};
+use opencv::{highgui, imgcodecs::*, imgproc::*, prelude::*, Result};
 
 fn main() -> Result<()> {
     let image = imread("input/rgb/front.png", IMREAD_COLOR)?;
-    let depth = imread("input/depth/front.png", IMREAD_COLOR)?;
+    let depth_rgb = imread("input/depth/front.png", IMREAD_COLOR)?;
+    let mut depth = Mat::default();
+    cvt_color(&depth_rgb, &mut depth, COLOR_BGR2GRAY, 0)?;
 
     let image_size = image.size()?;
     let depth_size = depth.size()?;
@@ -20,13 +22,21 @@ fn main() -> Result<()> {
 
     let x = 0;
     let y = 0;
-    // println!("{}", depth_pixels[(x + image_size.width * y) as usize]);
     for y in 0..image_size.height - 1 {
         for x in 0..image_size.width - 1 {
-            // let d = depth.at_2d::<u8>(y, x)?;
-            // let c = image.at_3d::<u8>(y, x, 0)?;
-            let mut p = preview.at_2d_mut::<Vec3b>(y, x)?;
-            *p = Vec3b::all(220);
+            let d = depth.at_2d::<u8>(y, x)?;
+            let c = image.at_2d::<Vec3b>(y, x)?;
+
+            let mut z: i32 = -(*d as i32) + 256;
+            if z < 0 {
+                z = 0;
+            }
+            if z >= image_size.width {
+                z = image_size.width - 1;
+                continue;
+            }
+            let mut p = preview.at_2d_mut::<Vec3b>(y, z)?;
+            *p = *c;
         }
     }
 
