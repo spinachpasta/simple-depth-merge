@@ -2,14 +2,14 @@
 #![allow(clippy::wildcard_imports)]
 use cv::core::Vec3b;
 use cv::prelude::MatExprTraitConst;
+use lstsq;
+use nalgebra as na;
 use opencv as cv;
 use opencv::{core::*, highgui, imgcodecs::*, imgproc::*, Result};
 use std::collections::HashMap;
-use nalgebra as na;
-
 struct DepthView {
     rgb: Mat,
-    depth: Mat,
+    depth: na::DMatrix<f64>,
     width: i32,
     height: i32,
     features: HashMap<String, Point_<i32>>,
@@ -23,15 +23,27 @@ impl DepthView {
     ) -> Result<DepthView> {
         let image = imread(rgb_path, IMREAD_COLOR)?;
         let depth_rgb = imread(depth_path, IMREAD_COLOR)?;
-        let mut depth = Mat::default();
-        cvt_color(&depth_rgb, &mut depth, COLOR_BGR2GRAY, 0)?;
-        DepthView::new(image, depth, features)
+        let mut depthgray = Mat::default();
+        cvt_color(&depth_rgb, &mut depthgray, COLOR_BGR2GRAY, 0)?;
+        let depth_size = depthgray.size()?;
+        let depthu8 = na::DMatrix::<u8>::from_row_slice(
+            depth_size.height as usize,
+            depth_size.width as usize,
+            depthgray.data_typed()?,
+        );
+        let depthf64 = na::convert::<na::DMatrix<u8>, na::DMatrix<f64>>(depthu8);
+
+        DepthView::new(image, depthf64, features)
     }
-    pub fn new(rgb: Mat, depth: Mat, features: HashMap<String, Point_<i32>>) -> Result<DepthView> {
+    pub fn new(
+        rgb: Mat,
+        depth: na::DMatrix<f64>,
+        features: HashMap<String, Point_<i32>>,
+    ) -> Result<DepthView> {
         let image_size = rgb.size()?;
-        let depth_size = depth.size()?;
+        let depth_size = depth.shape();
         assert!(
-            !(image_size.width != depth_size.width && image_size.height != depth_size.height),
+            !(image_size.width != depth_size.1 as i32 && image_size.height != depth_size.0 as i32),
             "size of rgb and depth image have to be equal"
         );
         let ret = DepthView {
@@ -74,14 +86,26 @@ impl DepthView {
     pub fn debug_side(&self) -> Result<Mat> {
         self.debug_depth(&self.depth)
     }
-    pub fn debug_depth(&self, depth: &Mat) -> Result<Mat> {
+    pub fn get_depth(&self, x: &i32, y: &i32) -> f64 {
+        self.depth[(*y as usize, *x as usize)]
+    }
+    pub fn get_depth_round(&self, x: &i32, y: &i32) -> i32 {
+        let r = self.get_depth(x, y).round();
+        let d = r as i32;
+        d
+    }
+    pub fn debug_depth(&self, depth: &na::DMatrix<f64>) -> Result<Mat> {
         let mut preview = (Mat::zeros(self.width, self.height, cv::core::CV_8UC3)?).to_mat()?;
 
         for y in 0..self.height - 1 {
             for x in 0..self.width - 1 {
-                let d = depth.at_2d::<u8>(y, x)?;
+                // let d = depth.at_2d::<u8>(y, x)?;
+                let d = self.get_depth_round(&x, &y);
                 let c = self.rgb.at_2d::<Vec3b>(y, x)?;
-                let z: i32 = i32::from(*d);
+                let z: i32 = self.get_depth_round(&x, &y);
+                if z < 0 || self.width <= z {
+                    continue;
+                }
                 let p = preview.at_2d_mut::<Vec3b>(y, z)?;
                 *p = *c;
             }
@@ -89,8 +113,7 @@ impl DepthView {
         for (fpname, fp) in &self.features {
             let y = fp.y;
             let x = fp.x;
-            let d = depth.at_2d::<u8>(y, x)?;
-            let z: i32 = i32::from(*d);
+            let z = self.get_depth_round(&x, &y);
 
             circle(
                 &mut preview,
@@ -116,9 +139,40 @@ impl DepthView {
         Ok(preview)
     }
 
-    // pub fn get_zmatrix(&self, other: &DepthView) -> Vec4f {
-    //     let mut m = Vec4f::new(0.0, 0.0, 0.0, 0.0);
-    // }
+    pub fn get_zmatrix(&self, other: &DepthView) -> Result<na::Matrix4x1<f64>> {
+        // let mut m: na::Matrix1x4<f64> = na::Matrix1x4::zeros();
+        // m.set_row(0, na::RowVector4())
+        let fpnames = self.match_features(other);
+
+        let mut x = na::OMatrix::<f64, na::Dynamic, na::U4>::zeros(fpnames.len());
+        let mut y = na::OVector::<f64, na::Dynamic>::zeros(fpnames.len());
+        let mut index: usize = 0;
+        for (index, fpname) in fpnames.into_iter().enumerate() {
+            let origin = other.features.get(fpname).unwrap();
+            let target = other.features.get(fpname).unwrap();
+            x.set_column(
+                index,
+                &na::Matrix4x1::<f64>::new(
+                    f64::from(origin.x),
+                    f64::from(origin.y),
+                    self.get_depth(&origin.x, &origin.y),
+                    1.0,
+                ),
+            );
+            y.set_column(index, &na::Vector1::<f64>::new(f64::from(target.x)));
+        }
+        let m = lstsq::lstsq(&x, &y, 1e-14).unwrap().solution;
+        Ok(m)
+    }
+
+    pub fn calibrate_z_linear(&self, other: &DepthView) -> Result<na::DMatrix<f64>> {
+        let mut calibrated = na::DMatrix::<f64>::zeros(1, 1);
+
+        for y in 0..self.height - 1 {
+            for x in 0..self.width - 1 {}
+        }
+        Ok(calibrated)
+    }
 
     pub fn match_features(&self, other: &DepthView) -> Vec<&str> {
         let mut matched_features: Vec<&str> = Vec::<&str>::new();
@@ -131,45 +185,6 @@ impl DepthView {
             }
         }
         matched_features
-    }
-
-    pub fn get_calibrated(&self, other: &DepthView) -> Result<Mat> {
-        let mut calibrated = (Mat::zeros(self.width, self.height, cv::core::CV_8UC1)?).to_mat()?;
-        let mut matched_features: Vec<&str> = self.match_features(other);
-
-        for y in 0..self.height - 1 {
-            for x in 0..self.width - 1 {
-                let mut weights: HashMap<String, f64> = HashMap::new();
-                let mut translations: HashMap<String, f64> = HashMap::new();
-                let mut total_weight = 0.0;
-
-                for fpname in &matched_features {
-                    let fp = self.features.get(*fpname).unwrap();
-                    let fp1 = other.features.get(*fpname).unwrap();
-                    let dsq = (fp.x - x) * (fp.x - x) + (fp.y - y) * (fp.y - y);
-                    let weight = 1.0 / (1.0 + f64::from(dsq));
-                    weights.insert((*fpname).to_string(), weight);
-
-                    let fpz = self.depth.at_2d::<u8>(fp.y, fp.x)?;
-                    translations
-                        .insert((*fpname).to_string(), (f64::from(fp1.x) - f64::from(*fpz)));
-                    total_weight += weight;
-                }
-                let mut translation = 0.0;
-
-                for fpname in &matched_features {
-                    translation += translations.get(*fpname).unwrap()
-                        * weights.get(*fpname).unwrap()
-                        / total_weight;
-                }
-                let d = self.depth.at_2d::<u8>(y, x)?;
-                let z: i32 = i32::from((*d)) + translation.floor() as i32;
-                let zu8: u8 = z.clamp(0, 255) as u8;
-                let p = calibrated.at_2d_mut::<u8>(y, x)?;
-                *p = zu8;
-            }
-        }
-        Ok(calibrated)
     }
 }
 
@@ -204,11 +219,11 @@ fn main() -> Result<()> {
     highgui::named_window("side", 0)?;
     highgui::imshow("side", &side.debug_features()?)?;
 
-    highgui::named_window("corrected", 0)?;
-    highgui::imshow(
-        "corrected",
-        &front.debug_depth(&front.get_calibrated(&side)?)?,
-    )?;
+    // highgui::named_window("corrected", 0)?;
+    // highgui::imshow(
+    //     "corrected",
+    //     &front.debug_depth(&front.get_calibrated(&side)?)?,
+    // )?;
 
     highgui::wait_key(10000)?;
     Ok(())

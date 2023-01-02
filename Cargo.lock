@@ -72,6 +72,7 @@ dependencies = [
 name = "depthmerge"
 version = "0.1.0"
 dependencies = [
+ "lstsq",
  "nalgebra",
  "ndarray",
  "opencv",
@@ -112,6 +113,15 @@ checksum = "b67380fd3b2fbe7527a606e18729d21c6f3951633d0500574c4dc22d2d638b9f"
 dependencies = [
  "cfg-if",
  "winapi",
+]
+
+[[package]]
+name = "lstsq"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "090c82b62cea25118790ca8fe5290b41e019f913915920df18ddfe5049bd8aae"
+dependencies = [
+ "nalgebra",
 ]
 
 [[package]]
