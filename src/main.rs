@@ -5,6 +5,7 @@ use cv::prelude::MatExprTraitConst;
 use opencv as cv;
 use opencv::{core::*, highgui, imgcodecs::*, imgproc::*, Result};
 use std::collections::HashMap;
+use nalgebra as na;
 
 struct DepthView {
     rgb: Mat,
@@ -115,8 +116,11 @@ impl DepthView {
         Ok(preview)
     }
 
-    pub fn get_calibrated(&self, other: &DepthView) -> Result<Mat> {
-        let mut calibrated = (Mat::zeros(self.width, self.height, cv::core::CV_8UC1)?).to_mat()?;
+    // pub fn get_zmatrix(&self, other: &DepthView) -> Vec4f {
+    //     let mut m = Vec4f::new(0.0, 0.0, 0.0, 0.0);
+    // }
+
+    pub fn match_features(&self, other: &DepthView) -> Vec<&str> {
         let mut matched_features: Vec<&str> = Vec::<&str>::new();
         for (fpname, fp) in &self.features {
             for (fpname1, fp1) in &other.features {
@@ -126,7 +130,13 @@ impl DepthView {
                 }
             }
         }
-        matched_features.len();
+        matched_features
+    }
+
+    pub fn get_calibrated(&self, other: &DepthView) -> Result<Mat> {
+        let mut calibrated = (Mat::zeros(self.width, self.height, cv::core::CV_8UC1)?).to_mat()?;
+        let mut matched_features: Vec<&str> = self.match_features(other);
+
         for y in 0..self.height - 1 {
             for x in 0..self.width - 1 {
                 let mut weights: HashMap<String, f64> = HashMap::new();
