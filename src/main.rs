@@ -3,9 +3,10 @@
 use cv::core::Vec3b;
 use cv::prelude::MatExprTraitConst;
 
+use cv::types::{VectorOfPoint3d, VectorOfPoint3i, VectorOfVectorOfu8};
 use nalgebra as na;
 use opencv as cv;
-use opencv::{core::*, highgui, imgcodecs::*, imgproc::*, Result};
+use opencv::{core::*, highgui, imgcodecs::*, imgproc::*, viz, Result};
 use std::collections::HashMap;
 struct DepthView {
     rgb: Mat,
@@ -213,6 +214,31 @@ impl DepthView {
         }
         matched_features
     }
+    fn get_cv2_pointcloud(&self, depth: na::DMatrix<f64>) -> Result<viz::WCloud> {
+        let mut points = Vec::<Point3d>::new();
+        let mut colors = Vec::<Point3i>::new();
+        for y in 0..self.height - 1 {
+            for x in 0..self.width - 1 {
+                let z = depth[(y as usize, x as usize)];
+                let mut p = Point3d {
+                    x: x as f64,
+                    y: y as f64,
+                    z: z,
+                };
+                points.push(p);
+                let color = self.rgb.at_2d::<Vec3b>(y, x)?;
+                let color1 = Point3i {
+                    x: color.0[0] as i32,
+                    y: color.0[1] as i32,
+                    z: color.0[2] as i32,
+                };
+                colors.push(color1);
+            }
+        }
+        let points = VectorOfPoint3d::from(points);
+        let colors = VectorOfPoint3i::from(colors);
+        viz::WCloud::new(&points, &colors)
+    }
 }
 
 fn main() -> Result<()> {
@@ -249,7 +275,7 @@ fn main() -> Result<()> {
     highgui::named_window("corrected", 0)?;
     highgui::imshow(
         "corrected",
-        &front.debug_depth(&front.calibrate_z_linear(&side)?)?,
+        &side.debug_depth(&side.calibrate_z_linear(&front)?)?,
     )?;
 
     highgui::wait_key(0)?;
