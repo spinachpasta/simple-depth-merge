@@ -1,12 +1,15 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::wildcard_imports)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_possible_truncation)]
 use cv::core::Vec3b;
 use cv::prelude::MatExprTraitConst;
 
-use cv::types::{VectorOfPoint3d, VectorOfPoint3i, VectorOfVectorOfu8};
+use cv::types::{VectorOfPoint3d, VectorOfPoint3i};
 use nalgebra as na;
 use opencv as cv;
-use opencv::{core::*, highgui, imgcodecs::*, imgproc::*, viz, Result};
+use opencv::{core::*, highgui, imgcodecs::*, imgproc::*, viz, viz::Viz3dTrait, Result};
+
 use std::collections::HashMap;
 struct DepthView {
     rgb: Mat,
@@ -44,7 +47,7 @@ impl DepthView {
         let image_size = rgb.size()?;
         let depth_size = depth.shape();
         assert!(
-            !(image_size.width != depth_size.1 as i32 && image_size.height != depth_size.0 as i32),
+            !(image_size.width != i32::try_from(depth_size.1).unwrap() && image_size.height != i32::try_from(depth_size.0).unwrap() ),
             "size of rgb and depth image have to be equal"
         );
         let ret = DepthView {
@@ -84,15 +87,8 @@ impl DepthView {
         }
         Ok(preview)
     }
-    pub fn debug_side(&self) -> Result<Mat> {
-        self.debug_depth(&self.depth)
-    }
-    pub fn get_depth(&self, x: &i32, y: &i32) -> f64 {
-        self.depth[(*y as usize, *x as usize)]
-    }
-    pub fn get_depth_round(&self, x: &i32, y: &i32) -> i32 {
-        let r = self.get_depth(x, y).round();
-        r as i32
+    pub fn get_depth(&self, x: i32, y: i32) -> f64 {
+        self.depth[(y as usize, x as usize)]
     }
     pub fn debug_depth(&self, depth: &na::DMatrix<f64>) -> Result<Mat> {
         let mut preview = (Mat::zeros(self.width, self.height, cv::core::CV_8UC3)?).to_mat()?;
@@ -137,40 +133,39 @@ impl DepthView {
         Ok(preview)
     }
 
-    pub fn get_zmatrix(&self, other: &DepthView) -> Result<na::Matrix3x1<f64>> {
+    pub fn get_zmatrix(&self, other: &DepthView) -> nalgebra::Matrix<f64, nalgebra::Const<3>, nalgebra::Const<1>, nalgebra::ArrayStorage<f64, 3, 1>> {
         // let mut m: na::Matrix1x4<f64> = na::Matrix1x4::zeros();
         // m.set_row(0, na::RowVector4())
         let fpnames = self.match_features(other);
 
         let mut x = na::OMatrix::<f64, na::Dynamic, na::U2>::zeros(fpnames.len());
         let mut y = na::OVector::<f64, na::Dynamic>::zeros(fpnames.len());
-        let mut index: usize = 0;
 
         for (index, fpname) in fpnames.into_iter().enumerate() {
             let origin = self.features.get(fpname).unwrap();
             let target = other.features.get(fpname).unwrap();
-            x[(index, 0)] = self.get_depth(&origin.x, &origin.y);
+            x[(index, 0)] = self.get_depth(origin.x, origin.y);
             x[(index, 1)] = f64::from(origin.y);
             y[(index, 0)] = f64::from(target.x);
         }
-        let xmean = x.row_mean();
-        let ymean = y.row_mean();
+        let x_mean = x.row_mean();
+        let y_mean = y.row_mean();
 
-        let xx = na::Matrix::from({
-            let subxmean = -xmean;
+        let xx = {
+            let subxmean = -x_mean;
             //subtract x
             let mut xx1 = x.clone();
             for (mut column, coeff) in xx1.column_iter_mut().zip(subxmean.iter()) {
-                column.add_scalar_mut(*coeff)
+                column.add_scalar_mut(*coeff);
             }
             xx1
-        });
+        };
         let yy = {
-            let subymean = -ymean;
+            let subymean = -y_mean;
             //subtract y
             let mut yy1 = y.clone();
             for (mut column, coeff) in yy1.column_iter_mut().zip(subymean.iter()) {
-                column.add_scalar_mut(*coeff)
+                column.add_scalar_mut(*coeff);
             }
             yy1
         };
@@ -179,33 +174,33 @@ impl DepthView {
         println!("{yy}");
         // let m = (xx.clone() * xx.clone().transpose()).try_inverse().unwrap()*xx.clone()*yy.clone();
         let m = lstsq::lstsq(&xx, &yy, 1e-14).unwrap().solution;
-        let w = ymean - xmean * m;
-        let m1 = na::Matrix3x1::<f64>::new(m.x, m.y, w.x);
-        Ok(m1)
+        let w = y_mean - x_mean * m;
+        
+        na::Matrix3x1::<f64>::new(m.x, m.y, w.x)
     }
 
-    pub fn calibrate_z_linear(&self, other: &DepthView) -> Result<na::DMatrix<f64>> {
+    pub fn calibrate_z_linear(&self, other: &DepthView) -> nalgebra::Matrix<f64, nalgebra::Dynamic, nalgebra::Dynamic, nalgebra::VecStorage<f64, nalgebra::Dynamic, nalgebra::Dynamic>> {
         let mut calibrated = na::DMatrix::<f64>::zeros(self.height as usize, self.width as usize);
 
-        let m = self.get_zmatrix(other)?;
+        let m = self.get_zmatrix(other);
         println!("!{m}");
         for y in 0..self.height - 1 {
             for x in 0..self.width - 1 {
                 // println!("{x} {y}");
-                let d = (na::Matrix1x3::<f64>::new(self.get_depth(&x, &y), f64::from(y), 1.0) * m);
+                let d = na::Matrix1x3::<f64>::new(self.get_depth(x, y), f64::from(y), 1.0) * m;
                 calibrated[(y as usize, x as usize)] = d[(0, 0)];
             }
         }
         let cmax = calibrated.max();
         let cmin = calibrated.min();
         println!("min {cmin} max {cmax}");
-        Ok(calibrated)
+        calibrated
     }
 
     pub fn match_features(&self, other: &DepthView) -> Vec<&str> {
         let mut matched_features: Vec<&str> = Vec::<&str>::new();
-        for (fpname, fp) in &self.features {
-            for (fpname1, fp1) in &other.features {
+        for fpname in self.features.keys() {
+            for fpname1 in other.features.keys() {
                 if *fpname == *fpname1 {
                     matched_features.push(fpname);
                     break;
@@ -214,25 +209,25 @@ impl DepthView {
         }
         matched_features
     }
-    fn get_cv2_pointcloud(&self, depth: na::DMatrix<f64>) -> Result<viz::WCloud> {
+    fn get_cv2_pointcloud(&self, depth: &na::DMatrix<f64>) -> Result<viz::WCloud> {
         let mut points = Vec::<Point3d>::new();
         let mut colors = Vec::<Point3i>::new();
         for y in 0..self.height - 1 {
             for x in 0..self.width - 1 {
                 let z = depth[(y as usize, x as usize)];
-                let mut p = Point3d {
-                    x: x as f64,
-                    y: y as f64,
-                    z: z,
+                let p = Point3d {
+                    x: f64::from(x),
+                    y: f64::from(y),
+                    z,
                 };
                 points.push(p);
                 let color = self.rgb.at_2d::<Vec3b>(y, x)?;
-                let color1 = Point3i {
-                    x: color.0[0] as i32,
-                    y: color.0[1] as i32,
-                    z: color.0[2] as i32,
+                let color = Point3i {
+                    x: i32::from(color.0[0]),
+                    y: i32::from(color.0[1]),
+                    z: i32::from(color.0[2]),
                 };
-                colors.push(color1);
+                colors.push(color);
             }
         }
         let points = VectorOfPoint3d::from(points);
@@ -275,8 +270,13 @@ fn main() -> Result<()> {
     highgui::named_window("corrected", 0)?;
     highgui::imshow(
         "corrected",
-        &side.debug_depth(&side.calibrate_z_linear(&front)?)?,
+        &side.debug_depth(&side.calibrate_z_linear(&front))?,
     )?;
+
+    let mut viewer: viz::Viz3d = viz::Viz3d::new("3dview")?;
+    let cloud = side.get_cv2_pointcloud(&side.calibrate_z_linear(&front))?;
+
+    viewer.show_widget("pointcloud", &cloud.into(), Affine3d::default())?;
 
     highgui::wait_key(0)?;
     Ok(())
