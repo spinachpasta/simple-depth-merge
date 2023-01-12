@@ -5,7 +5,6 @@
 use cv::core::Vec3b;
 use cv::prelude::MatExprTraitConst;
 
-use cv::types::{VectorOfPoint3d, VectorOfPoint3i};
 use nalgebra as na;
 use opencv as cv;
 use opencv::{core::*, highgui, imgcodecs::*, imgproc::*, viz, viz::Viz3dTrait, Result};
@@ -47,7 +46,8 @@ impl DepthView {
         let image_size = rgb.size()?;
         let depth_size = depth.shape();
         assert!(
-            !(image_size.width != i32::try_from(depth_size.1).unwrap() && image_size.height != i32::try_from(depth_size.0).unwrap() ),
+            !(image_size.width != i32::try_from(depth_size.1).unwrap()
+                && image_size.height != i32::try_from(depth_size.0).unwrap()),
             "size of rgb and depth image have to be equal"
         );
         let ret = DepthView {
@@ -133,7 +133,15 @@ impl DepthView {
         Ok(preview)
     }
 
-    pub fn get_zmatrix(&self, other: &DepthView) -> nalgebra::Matrix<f64, nalgebra::Const<3>, nalgebra::Const<1>, nalgebra::ArrayStorage<f64, 3, 1>> {
+    pub fn get_zmatrix(
+        &self,
+        other: &DepthView,
+    ) -> nalgebra::Matrix<
+        f64,
+        nalgebra::Const<3>,
+        nalgebra::Const<1>,
+        nalgebra::ArrayStorage<f64, 3, 1>,
+    > {
         // let mut m: na::Matrix1x4<f64> = na::Matrix1x4::zeros();
         // m.set_row(0, na::RowVector4())
         let fpnames = self.match_features(other);
@@ -175,11 +183,19 @@ impl DepthView {
         // let m = (xx.clone() * xx.clone().transpose()).try_inverse().unwrap()*xx.clone()*yy.clone();
         let m = lstsq::lstsq(&xx, &yy, 1e-14).unwrap().solution;
         let w = y_mean - x_mean * m;
-        
+
         na::Matrix3x1::<f64>::new(m.x, m.y, w.x)
     }
 
-    pub fn calibrate_z_linear(&self, other: &DepthView) -> nalgebra::Matrix<f64, nalgebra::Dynamic, nalgebra::Dynamic, nalgebra::VecStorage<f64, nalgebra::Dynamic, nalgebra::Dynamic>> {
+    pub fn calibrate_z_linear(
+        &self,
+        other: &DepthView,
+    ) -> nalgebra::Matrix<
+        f64,
+        nalgebra::Dynamic,
+        nalgebra::Dynamic,
+        nalgebra::VecStorage<f64, nalgebra::Dynamic, nalgebra::Dynamic>,
+    > {
         let mut calibrated = na::DMatrix::<f64>::zeros(self.height as usize, self.width as usize);
 
         let m = self.get_zmatrix(other);
@@ -210,28 +226,32 @@ impl DepthView {
         matched_features
     }
     fn get_cv2_pointcloud(&self, depth: &na::DMatrix<f64>) -> Result<viz::WCloud> {
-        let mut points = Vec::<Point3d>::new();
-        let mut colors = Vec::<Point3i>::new();
-        for y in 0..self.height - 1 {
-            for x in 0..self.width - 1 {
-                let z = depth[(y as usize, x as usize)];
-                let p = Point3d {
-                    x: f64::from(x),
-                    y: f64::from(y),
-                    z,
-                };
-                points.push(p);
-                let color = self.rgb.at_2d::<Vec3b>(y, x)?;
-                let color = Point3i {
-                    x: i32::from(color.0[0]),
-                    y: i32::from(color.0[1]),
-                    z: i32::from(color.0[2]),
-                };
-                colors.push(color);
+        let mut points = Mat::default();
+        // let mut colors = Vec::<Vec3b>::new();
+        let mut colors = Mat::default();
+        unsafe {
+            points.create_rows_cols(self.width * self.height, 1, CV_64FC3)?;
+
+            colors.create_rows_cols(self.width * self.height, 1, CV_8UC3)?;
+        }
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let idx = y * self.width + x;
+                {
+                    let z = depth[(y as usize, x as usize)];
+                    // let p = Vec3d:: (x,y,z);
+                    let p = points.at_2d_mut::<Vec3d>(idx, 0)?;
+                    p.0[0] = f64::from(x);
+                    p.0[1] = f64::from(y);
+                    p.0[2] = z;
+                }
+                {
+                    let color = self.rgb.at_2d::<Vec3b>(y, x)?;
+                    let p = colors.at_2d_mut::<Vec3b>(idx, 0)?;
+                    *p = *color;
+                }
             }
         }
-        let points = VectorOfPoint3d::from(points);
-        let colors = VectorOfPoint3i::from(colors);
         viz::WCloud::new(&points, &colors)
     }
 }
@@ -277,6 +297,7 @@ fn main() -> Result<()> {
     let cloud = side.get_cv2_pointcloud(&side.calibrate_z_linear(&front))?;
 
     viewer.show_widget("pointcloud", &cloud.into(), Affine3d::default())?;
+    viewer.spin_once(1_000_000, true)?;
 
     highgui::wait_key(0)?;
     Ok(())
