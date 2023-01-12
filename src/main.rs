@@ -2,20 +2,90 @@
 #![allow(clippy::wildcard_imports)]
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
 use cv::core::Vec3b;
-use cv::prelude::MatExprTraitConst;
 
 use nalgebra as na;
 use opencv as cv;
 use opencv::{core::*, highgui, imgcodecs::*, imgproc::*, viz, viz::Viz3dTrait, Result};
 
 use std::collections::HashMap;
+use std::f64::consts::PI;
 struct DepthView {
     rgb: Mat,
     depth: na::DMatrix<f64>,
     width: i32,
     height: i32,
     features: HashMap<String, Point_<i32>>,
+}
+
+struct PointCloud {
+    colors: Vec<na::Vector3<u8>>,
+    points: Vec<na::OPoint<f64, na::Const<3>>>,
+    transform: na::Affine3<f64>,
+}
+
+impl PointCloud {
+    pub fn new(
+        rgb_img: &Mat,
+        depth: &na::DMatrix<f64>,
+        transform: na::Affine3<f64>,
+    ) -> Result<Self, cv::Error> {
+        //TODO: calculate normal here
+        let rgb_size = rgb_img.size()?;
+        let width = rgb_size.width;
+        let height = rgb_size.height;
+        let mut points = Vec::<na::OPoint<f64, na::Const<3>>>::new();
+        let mut colors = Vec::<na::Vector3<u8>>::new();
+
+        for y in 0..height {
+            for x in 0..width {
+                // let idx = y * width + x;
+                {
+                    let z = depth[(y as usize, x as usize)];
+                    let p = na::OPoint::<f64, na::Const<3>>::new(x.into(), y.into(), z);
+                    points.push(p);
+                }
+                {
+                    let color = rgb_img.at_2d::<Vec3b>(y, x)?;
+                    colors.push(na::Vector3::<u8>::new(color.0[0], color.0[1], color.0[2]));
+                }
+            }
+        }
+
+        Ok(PointCloud {
+            points,
+            colors,
+            transform,
+        })
+    }
+
+    fn get_cv2_pointcloud(&self) -> Result<viz::WCloud> {
+        let mut points = Mat::default();
+        // let mut colors = Vec::<Vec3b>::new();
+        let mut colors = Mat::default();
+        unsafe {
+            points.create_rows_cols(self.points.len().try_into().unwrap(), 1, CV_64FC3)?;
+            colors.create_rows_cols(self.colors.len().try_into().unwrap(), 1, CV_8UC3)?;
+        }
+        for idx in 0..self.points.len() {
+            {
+                let p = points.at_2d_mut::<Vec3d>(idx as i32, 0)?;
+                let v = self.points[idx];
+                let v = self.transform.transform_point(&v);
+                p.0[0] = v.x;
+                p.0[1] = v.y;
+                p.0[2] = v.z;
+            }
+            {
+                let p = colors.at_2d_mut::<Vec3b>(idx as i32, 0)?;
+                p.0[0] = self.colors[idx].x;
+                p.0[1] = self.colors[idx].y;
+                p.0[2] = self.colors[idx].z;
+            }
+        }
+        viz::WCloud::new(&points, &colors)
+    }
 }
 
 impl DepthView {
@@ -89,48 +159,6 @@ impl DepthView {
     }
     pub fn get_depth(&self, x: i32, y: i32) -> f64 {
         self.depth[(y as usize, x as usize)]
-    }
-    pub fn debug_depth(&self, depth: &na::DMatrix<f64>) -> Result<Mat> {
-        let mut preview = (Mat::zeros(self.width, self.height, cv::core::CV_8UC3)?).to_mat()?;
-
-        for y in 0..self.height - 1 {
-            for x in 0..self.width - 1 {
-                let c = self.rgb.at_2d::<Vec3b>(y, x)?;
-                let z = depth[(y as usize, x as usize)].round() as i32;
-                if z < 0 || self.width <= z {
-                    continue;
-                }
-                let p = preview.at_2d_mut::<Vec3b>(y, z)?;
-                *p = *c;
-            }
-        }
-        for (fpname, fp) in &self.features {
-            let y = fp.y;
-            let x = fp.x;
-            let z = depth[(y as usize, x as usize)].round() as i32;
-
-            circle(
-                &mut preview,
-                Point_ { x: z, y },
-                5,
-                Scalar_::new(255.0, 0.0, 0.0, 1.0),
-                -1,
-                1,
-                0,
-            )?;
-            put_text(
-                &mut preview,
-                fpname,
-                Point_ { x: z, y },
-                FONT_HERSHEY_DUPLEX,
-                1.0,
-                Scalar_::new(255.0, 128.0, 128.0, 1.0),
-                1,
-                1,
-                false,
-            )?;
-        }
-        Ok(preview)
     }
 
     pub fn get_zmatrix(
@@ -277,27 +305,31 @@ fn main() -> Result<()> {
 
     let side =
         DepthView::from_filename("input/rgb/side.png", "input/depth/side.png", feature_side)?;
-
-    // highgui::named_window("pseudo right", 0)?;
-    // highgui::imshow("pseudo right", &front.debug_side()?)?;
-
     // highgui::named_window("front", 0)?;
     // highgui::imshow("front", &front.debug_features()?)?;
 
-    highgui::named_window("side", 0)?;
-    highgui::imshow("side", &side.debug_features()?)?;
+    // highgui::named_window("side", 0)?;
+    // highgui::imshow("side", &side.debug_features()?)?;
 
-    highgui::named_window("corrected", 0)?;
-    highgui::imshow(
-        "corrected",
-        &side.debug_depth(&side.calibrate_z_linear(&front))?,
-    )?;
+    let side_affine = {
+        let matrix = na::Matrix4::new(
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0, 
+            0.0, 0.0, 0.0, 0.0,
+        );
+        na::Affine3::<f64>::from_matrix_unchecked(matrix)
+    };
+    let cloud_side = PointCloud::new(&side.rgb, &side.calibrate_z_linear(&front), side_affine)?;
 
-    let mut viewer: viz::Viz3d = viz::Viz3d::new("3dview")?;
-    let cloud = side.get_cv2_pointcloud(&side.calibrate_z_linear(&front))?;
+    let cloud_front = PointCloud::new(&front.rgb, &front.calibrate_z_linear(&side), na::Affine3::<f64>::identity())?;
 
-    viewer.show_widget("pointcloud", &cloud.into(), Affine3d::default())?;
-    viewer.spin_once(1_000_000, true)?;
+
+    let mut viewer: viz::Viz3d = viz::Viz3d::new("side view")?;
+    viewer.show_widget("side", &cloud_side.get_cv2_pointcloud()?.into(), Affine3d::default())?;
+
+    viewer.show_widget("front", &cloud_front.get_cv2_pointcloud()?.into(), Affine3d::default())?;
+    viewer.spin()?;
 
     highgui::wait_key(0)?;
     Ok(())
