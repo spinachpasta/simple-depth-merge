@@ -10,7 +10,6 @@ use opencv as cv;
 use opencv::{core::*, highgui, imgcodecs::*, imgproc::*, viz, viz::Viz3dTrait, Result};
 
 use std::collections::HashMap;
-use std::f64::consts::PI;
 struct DepthView {
     rgb: Mat,
     depth: na::DMatrix<f64>,
@@ -53,11 +52,7 @@ impl PointCloud {
             }
         }
 
-        Ok(PointCloud {
-            points,
-            colors,
-            transform,
-        })
+        Ok(PointCloud { colors, points, transform })
     }
 
     fn get_cv2_pointcloud(&self) -> Result<viz::WCloud> {
@@ -252,35 +247,6 @@ impl DepthView {
             }
         }
         matched_features
-    }
-    fn get_cv2_pointcloud(&self, depth: &na::DMatrix<f64>) -> Result<viz::WCloud> {
-        let mut points = Mat::default();
-        // let mut colors = Vec::<Vec3b>::new();
-        let mut colors = Mat::default();
-        unsafe {
-            points.create_rows_cols(self.width * self.height, 1, CV_64FC3)?;
-
-            colors.create_rows_cols(self.width * self.height, 1, CV_8UC3)?;
-        }
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let idx = y * self.width + x;
-                {
-                    let z = depth[(y as usize, x as usize)];
-                    // let p = Vec3d:: (x,y,z);
-                    let p = points.at_2d_mut::<Vec3d>(idx, 0)?;
-                    p.0[0] = f64::from(x);
-                    p.0[1] = f64::from(y);
-                    p.0[2] = z;
-                }
-                {
-                    let color = self.rgb.at_2d::<Vec3b>(y, x)?;
-                    let p = colors.at_2d_mut::<Vec3b>(idx, 0)?;
-                    *p = *color;
-                }
-            }
-        }
-        viz::WCloud::new(&points, &colors)
     }
 }
 
