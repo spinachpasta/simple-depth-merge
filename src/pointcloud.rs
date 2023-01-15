@@ -1,7 +1,7 @@
-
 use cv::core::Vec3b;
 
 use nalgebra as na;
+use nalgebra::Affine3;
 use opencv as cv;
 use opencv::{core::*, viz, Result};
 
@@ -39,7 +39,26 @@ impl PointCloud {
             }
         }
 
-        Ok(PointCloud { colors, points, transform })
+        Ok(PointCloud {
+            colors,
+            points,
+            transform,
+        })
+    }
+
+    pub fn affine_applied(
+        &self,
+        transform: na::Affine3<f64>,
+    ) -> Vec<na::OPoint<f64, na::Const<3>>> {
+        let mut points = Vec::<na::OPoint<f64, na::Const<3>>>::new();
+        for p in &self.points {
+            let global_point = transform.transform_point(p);
+            points.push(global_point);
+        }
+        points
+    }
+    pub fn get_global_points(&self) -> Vec<na::OPoint<f64, na::Const<3>>> {
+        self.affine_applied(self.transform)
     }
 
     pub fn get_cv2_pointcloud(&self) -> Result<viz::WCloud> {
@@ -50,11 +69,11 @@ impl PointCloud {
             points.create_rows_cols(self.points.len().try_into().unwrap(), 1, CV_64FC3)?;
             colors.create_rows_cols(self.colors.len().try_into().unwrap(), 1, CV_8UC3)?;
         }
+        let global_points = self.get_global_points();
         for idx in 0..self.points.len() {
             {
                 let p = points.at_2d_mut::<Vec3d>(idx as i32, 0)?;
-                let v = self.points[idx];
-                let v = self.transform.transform_point(&v);
+                let v = global_points[idx];
                 p.0[0] = v.x;
                 p.0[1] = v.y;
                 p.0[2] = v.z;
@@ -67,5 +86,24 @@ impl PointCloud {
             }
         }
         viz::WCloud::new(&points, &colors)
+    }
+
+    pub fn approximate_to(&mut self, other: &PointCloud, t: &f64) {
+        let other_global = other.get_global_points();
+        let mut other_local = Vec::<na::OPoint<f64, na::Const<3>>>::new();
+
+        println!("{0}", self.transform.matrix());
+        for p in other_global {
+            other_local.push(self.transform.inverse_transform_point(&p));
+        }
+        let kdtree = kd_tree::KdTree::build_by_ordered_float(other_local);
+
+        // let mut counter = 0;
+        for p in &mut self.points {
+            let p1 = kdtree.nearest(p).unwrap().item;
+            p.z = p.z * (1.0 - t) + t * p1.z;
+            // println!("{0}/{1}", counter, 512 * 512);
+            // counter += 1;
+        }
     }
 }

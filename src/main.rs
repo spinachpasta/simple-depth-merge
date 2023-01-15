@@ -45,18 +45,22 @@ fn main() -> Result<()> {
             0.0, 0.0, 1.0, 0.0,
             0.0, 1.0, 0.0, 0.0,
             1.0, 0.0, 0.0, 0.0, 
-            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
         );
         na::Affine3::<f64>::from_matrix_unchecked(matrix)
     };
-    let cloud_side = PointCloud::new(&side.rgb, &side.calibrate_z_linear(&front), side_affine)?;
+    let mut cloud_side = PointCloud::new(&side.rgb, &side.calibrate_z_linear(&front), side_affine)?;
 
-    let cloud_front = PointCloud::new(&front.rgb, &front.calibrate_z_linear(&side), na::Affine3::<f64>::identity())?;
+    let mut cloud_front = PointCloud::new(&front.rgb, &front.calibrate_z_linear(&side), na::Affine3::<f64>::identity())?;
 
 
     let mut viewer: viz::Viz3d = viz::Viz3d::new("side view")?;
-    viewer.show_widget("side", &cloud_side.get_cv2_pointcloud()?.into(), Affine3d::default())?;
 
+
+    cloud_front.approximate_to(&cloud_side, &0.5);
+    // cloud_side.approximate_to(&cloud_front, &0.5);
+
+    // viewer.show_widget("side", &cloud_side.get_cv2_pointcloud()?.into(), Affine3d::default())?;
     viewer.show_widget("front", &cloud_front.get_cv2_pointcloud()?.into(), Affine3d::default())?;
     viewer.spin()?;
 
