@@ -10,4 +10,5 @@ nalgebra = "0.31.4"
 ndarray = "0.15.6"
 opencv = "0.74.2"
 lstsq = "*"
-kd-tree = {version="0.5.1",features=["nalgebra"]}
+kd-tree = {version="0.5.1",features=["nalgebra","rayon"]}
+rayon = "1.6.1"

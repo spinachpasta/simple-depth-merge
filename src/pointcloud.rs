@@ -4,7 +4,7 @@ use nalgebra as na;
 use nalgebra::Affine3;
 use opencv as cv;
 use opencv::{core::*, viz, Result};
-
+use rayon::prelude::*;
 pub struct PointCloud {
     pub colors: Vec<na::Vector3<u8>>,
     pub points: Vec<na::OPoint<f64, na::Const<3>>>,
@@ -98,12 +98,9 @@ impl PointCloud {
         }
         let kdtree = kd_tree::KdTree::build_by_ordered_float(other_local);
 
-        // let mut counter = 0;
-        for p in &mut self.points {
+        self.points.par_iter_mut().for_each(|p|{
             let p1 = kdtree.nearest(p).unwrap().item;
             p.z = p.z * (1.0 - t) + t * p1.z;
-            // println!("{0}/{1}", counter, 512 * 512);
-            // counter += 1;
-        }
+        });
     }
 }
